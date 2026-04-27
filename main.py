@@ -6,8 +6,8 @@ import yaml
 
 from ca import Grid, apply_rule, flood_fill_largest
 
-# CA rule sets
-# CAVE vs SMOOTH
+# CA rule sets B5678/S45678
+# CAVE vs SMOOTH-- cave is generated with rough edges and smoothing happens with flood fill
 CAVE_BORN = frozenset({5, 6, 7, 8})
 CAVE_SURVIVE = frozenset({4, 5, 6, 7, 8})
 SMOOTH_BORN = frozenset({5, 6, 7, 8})
@@ -75,12 +75,15 @@ def run_ca_pipeline(
     smooth_iterations: int,
     rng: np.random.Generator,
 ) -> tuple[Grid, Grid, int]:
-    """Run full CA pipeline. Returns (raw_grid, final_grid, num_regions)."""
+
     grid = Grid.random(height, width, fill_prob, rng)
     grid = apply_rule(grid, CAVE_BORN, CAVE_SURVIVE, ca_iterations)
+
     raw = grid.copy()
+
     grid = apply_rule(grid, SMOOTH_BORN, SMOOTH_SURVIVE, smooth_iterations)
     final, num_regions = flood_fill_largest(grid)
+
     return raw, final, num_regions
 
 

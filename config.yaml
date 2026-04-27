@@ -1,0 +1,5 @@
+width: 80
+height: 50
+fill_prob: 0.45
+ca_iterations: 4
+smooth_iterations: 2

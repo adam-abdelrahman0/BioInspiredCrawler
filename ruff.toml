@@ -1,0 +1,8 @@
+preview = true  # required for E221/E241
+
+[lint]
+# Extend ruff's default selection (E4, E7, E9, F) with whitespace-alignment rules.
+extend-select = [
+    "E241",  # multiple spaces after ','
+    "E221",  # multiple spaces before operator (catches aligned '=' padding)
+]

@@ -5,6 +5,13 @@ import numpy as np
 import yaml
 
 from ca import Grid, apply_rule, flood_fill_largest
+from entities import (
+    EntityPlacement,
+    render_entities_rgb,
+    spawn_enemies,
+    spawn_items,
+    spawn_player,
+)
 
 # CA rule sets B5678/S45678
 # CAVE vs SMOOTH-- cave is generated with rough edges and smoothing happens with flood fill
@@ -67,6 +74,18 @@ def visualize(raw: Grid, final: Grid) -> None:
     plt.show()
 
 
+def visualize_entities(cave: Grid, entities: EntityPlacement) -> None:
+    rgb = render_entities_rgb(cave, entities)
+    plt.figure(figsize=(10, 6))
+    plt.title("BioInspiredCrawler — Cave With Spawned Entities", fontsize=12)
+    plt.imshow(rgb, interpolation="nearest")
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig("output/ca_cave_entities.png", dpi=150, bbox_inches="tight")
+    print("Figure saved to output/ca_cave_entities.png")
+    plt.show()
+
+
 def run_ca_pipeline(
     height: int,
     width: int,
@@ -110,6 +129,32 @@ def main() -> None:
     print_summary(raw, final, num_regions)
     print(repr(final))
     visualize(raw, final)
+
+    player = spawn_player(final, rng)
+    sword, shield, coins, food = spawn_items(
+        final, player, rng, coin_count=10, food_count=6
+    )
+    blocked = {player, sword, shield, *coins, *food}
+    enemies = spawn_enemies(
+        final, player, blocked=blocked, coin_positions=coins, rng=rng, enemy_count=20
+    )
+    entities = EntityPlacement(
+        player=player,
+        sword=sword,
+        shield=shield,
+        coins=coins,
+        food=food,
+        enemies=enemies,
+    )
+
+    print("Entity counts:")
+    print(f"  Player : 1 at {player}")
+    print(f"  Sword  : 1 at {sword}")
+    print(f"  Shield : 1 at {shield}")
+    print(f"  Coins  : {len(coins)}")
+    print(f"  Food   : {len(food)}")
+    print(f"  Enemies: {len(enemies)}")
+    visualize_entities(final, entities)
 
 
 if __name__ == "__main__":

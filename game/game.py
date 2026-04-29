@@ -602,43 +602,43 @@ class DungeonCrawlerGame:
         assert self.exit_tile is not None
 
         cam_row, cam_col = self._get_camera_origin()
+        frac_row = cam_row - math.floor(cam_row)
+        frac_col = cam_col - math.floor(cam_col)
+        tile_row0 = int(math.floor(cam_row))
+        tile_col0 = int(math.floor(cam_col))
         top = HUD_HEIGHT
         now = self._now_ms()
 
-        for view_r in range(VIEW_TILES):
-            for view_c in range(VIEW_TILES):
-                row = cam_row + view_r
-                col = cam_col + view_c
-                x = self.world_left + view_c * TILE_SIZE
-                y = top + view_r * TILE_SIZE
+        for view_r in range(VIEW_TILES + 2):
+            for view_c in range(VIEW_TILES + 2):
+                tile_row = tile_row0 + view_r
+                tile_col = tile_col0 + view_c
+                if not (0 <= tile_row < MAP_HEIGHT and 0 <= tile_col < MAP_WIDTH):
+                    continue
+                x = self.world_left + (view_c - frac_col) * TILE_SIZE
+                y = top + (view_r - frac_row) * TILE_SIZE
                 dist = math.sqrt(
-                    (row - self.player.render_row) ** 2
-                    + (col - self.player.render_col) ** 2
+                    (tile_row - self.player.render_row) ** 2
+                    + (tile_col - self.player.render_col) ** 2
                 )
                 if dist >= LIGHT_RADIUS:
                     self.canvas.create_rectangle(
-                        x,
-                        y,
-                        x + TILE_SIZE,
-                        y + TILE_SIZE,
-                        fill=BG,
-                        width=0,
-                        tags="world",
+                        x, y, x + TILE_SIZE, y + TILE_SIZE, fill=BG, width=0, tags="world"
                     )
                     continue
                 brightness = max(
                     0.0,
                     1.0 - max(0.0, dist - _FOG_START) / (LIGHT_RADIUS - _FOG_START),
                 )
-                if self.cave.data[row, col] == 1:
-                    draw_floor(self.canvas, x, y, row, col, "world", brightness)
+                if self.cave.data[tile_row, tile_col] == 1:
+                    draw_floor(self.canvas, x, y, tile_row, tile_col, "world", brightness)
                 else:
-                    draw_wall(self.canvas, x, y, row, col, "world", brightness)
+                    draw_wall(self.canvas, x, y, tile_row, tile_col, "world", brightness)
 
         exit_row, exit_col = self.exit_tile
         if (
-            cam_row <= exit_row < cam_row + VIEW_TILES
-            and cam_col <= exit_col < cam_col + VIEW_TILES
+            cam_row - 1 <= exit_row < cam_row + VIEW_TILES + 1
+            and cam_col - 1 <= exit_col < cam_col + VIEW_TILES + 1
         ):
             draw_exit(
                 self.canvas,
@@ -650,8 +650,8 @@ class DungeonCrawlerGame:
 
         for item in self.items:
             if not (
-                cam_row <= item.row < cam_row + VIEW_TILES
-                and cam_col <= item.col < cam_col + VIEW_TILES
+                cam_row - 1 <= item.row < cam_row + VIEW_TILES + 1
+                and cam_col - 1 <= item.col < cam_col + VIEW_TILES + 1
             ):
                 continue
             x = self.world_left + (item.col - cam_col) * TILE_SIZE
@@ -669,63 +669,61 @@ class DungeonCrawlerGame:
             if not enemy.alive:
                 continue
             if not (
-                cam_row <= enemy.render_row < cam_row + VIEW_TILES
-                and cam_col <= enemy.render_col < cam_col + VIEW_TILES
+                cam_row - 1 <= enemy.render_row < cam_row + VIEW_TILES + 1
+                and cam_col - 1 <= enemy.render_col < cam_col + VIEW_TILES + 1
             ):
                 continue
-            x = self.world_left + round((enemy.render_col - cam_col) * TILE_SIZE)
-            y = top + round((enemy.render_row - cam_row) * TILE_SIZE)
+            x = self.world_left + (enemy.render_col - cam_col) * TILE_SIZE
+            y = top + (enemy.render_row - cam_row) * TILE_SIZE
             draw_enemy(self.canvas, x, y, "world")
 
         for enemy in self.boid_enemies:
             if not enemy.alive:
                 continue
             if not (
-                cam_row <= enemy.render_row < cam_row + VIEW_TILES
-                and cam_col <= enemy.render_col < cam_col + VIEW_TILES
+                cam_row - 1 <= enemy.render_row < cam_row + VIEW_TILES + 1
+                and cam_col - 1 <= enemy.render_col < cam_col + VIEW_TILES + 1
             ):
                 continue
-            x = self.world_left + round((enemy.render_col - cam_col) * TILE_SIZE)
-            y = top + round((enemy.render_row - cam_row) * TILE_SIZE)
+            x = self.world_left + (enemy.render_col - cam_col) * TILE_SIZE
+            y = top + (enemy.render_row - cam_row) * TILE_SIZE
             draw_boid_enemy(self.canvas, x, y, "world")
 
         if self.attack_tile and now < self.attack_end:
             attack_row, attack_col = self.attack_tile
             if (
-                cam_row <= attack_row < cam_row + VIEW_TILES
-                and cam_col <= attack_col < cam_col + VIEW_TILES
+                cam_row - 1 <= attack_row < cam_row + VIEW_TILES + 1
+                and cam_col - 1 <= attack_col < cam_col + VIEW_TILES + 1
             ):
                 x = self.world_left + (attack_col - cam_col) * TILE_SIZE
                 y = top + (attack_row - cam_row) * TILE_SIZE
                 color = "#f9e9a4" if self.sword_equipped else "#909090"
                 self.canvas.create_rectangle(
-                    x + 5,
-                    y + 5,
-                    x + TILE_SIZE - 5,
-                    y + TILE_SIZE - 5,
-                    outline=color,
-                    width=2,
-                    tags="world",
+                    x + 5, y + 5, x + TILE_SIZE - 5, y + TILE_SIZE - 5,
+                    outline=color, width=2, tags="world",
                 )
         elif now >= self.attack_end:
             self.attack_tile = None
 
-        px = self.world_left + round((self.player.render_col - cam_col) * TILE_SIZE)
-        py = top + round((self.player.render_row - cam_row) * TILE_SIZE)
+        px = self.world_left + (self.player.render_col - cam_col) * TILE_SIZE
+        py = top + (self.player.render_row - cam_row) * TILE_SIZE
         if now < self.flash_end and int(now / 80) % 2 == 0:
             self.canvas.create_rectangle(
-                px,
-                py,
-                px + TILE_SIZE,
-                py + TILE_SIZE,
-                fill="#f4f4f4",
-                width=0,
-                tags="world",
+                px, py, px + TILE_SIZE, py + TILE_SIZE,
+                fill="#f4f4f4", width=0, tags="world",
             )
         draw_player(self.canvas, px, py, self.player.facing, "world")
 
         self.canvas.scale(
             "world", self.world_left, HUD_HEIGHT, self.render_scale, self.render_scale
+        )
+        # Mask tiles that bled into the viewport padding due to sub-tile camera offset
+        self.canvas.create_rectangle(
+            0, HUD_HEIGHT, self.world_left, self.window_height, fill=BG, width=0
+        )
+        self.canvas.create_rectangle(
+            self.world_left + self.viewport_width, HUD_HEIGHT,
+            self.window_width, self.window_height, fill=BG, width=0,
         )
         self.canvas.create_text(
             self.world_left,
@@ -953,12 +951,12 @@ class DungeonCrawlerGame:
 
     # ----------------------------------------------------------------- helpers
 
-    def _get_camera_origin(self) -> tuple[int, int]:
+    def _get_camera_origin(self) -> tuple[float, float]:
         assert self.player is not None
-        max_row = MAP_HEIGHT - VIEW_TILES
-        max_col = MAP_WIDTH - VIEW_TILES
-        row = max(0, min(max_row, self.player.row - VIEW_TILES // 2))
-        col = max(0, min(max_col, self.player.col - VIEW_TILES // 2))
+        max_row = float(MAP_HEIGHT - VIEW_TILES)
+        max_col = float(MAP_WIDTH - VIEW_TILES)
+        row = max(0.0, min(max_row, self.player.render_row - VIEW_TILES / 2))
+        col = max(0.0, min(max_col, self.player.render_col - VIEW_TILES / 2))
         return row, col
 
     def _is_walkable(self, row: int, col: int) -> bool:

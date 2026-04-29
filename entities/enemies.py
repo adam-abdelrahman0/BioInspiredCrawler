@@ -2,20 +2,8 @@ import numpy as np
 
 from ca import Grid
 
+from ._utils import chebyshev, is_clear_of_neighbors
 from .aco import build_pheromone_map, distance_from_start
-
-
-def _chebyshev(a: tuple[int, int], b: tuple[int, int]) -> int:
-    return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
-
-
-def _is_clear_of_neighbors(
-    cell: tuple[int, int], occupied: set[tuple[int, int]], min_chebyshev: int = 1
-) -> bool:
-    for other in occupied:
-        if _chebyshev(cell, other) <= min_chebyshev:
-            return False
-    return True
 
 
 def spawn_enemies(
@@ -50,7 +38,7 @@ def spawn_enemies(
         eligible = [
             c
             for c in candidates
-            if c not in occupied and _is_clear_of_neighbors(c, occupied, 1)
+            if c not in occupied and is_clear_of_neighbors(c, occupied, 1)
         ]
         if not eligible:
             break
@@ -59,7 +47,7 @@ def spawn_enemies(
         for r, c in eligible:
             near_coin = 0.0
             if coin_positions:
-                d_coin = min(_chebyshev((r, c), coin) for coin in coin_positions)
+                d_coin = min(chebyshev((r, c), coin) for coin in coin_positions)
                 near_coin = 1.0 / (1.0 + d_coin)
 
             far_from_start = (
@@ -71,7 +59,7 @@ def spawn_enemies(
 
             spread_bonus = 1.0
             if selected:
-                d_enemy = min(_chebyshev((r, c), e) for e in selected)
+                d_enemy = min(chebyshev((r, c), e) for e in selected)
                 spread_bonus += 0.30 * min(d_enemy, 12)
 
             w = (

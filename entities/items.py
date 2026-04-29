@@ -2,20 +2,8 @@ import numpy as np
 
 from ca import Grid
 
+from ._utils import chebyshev, is_clear_of_neighbors
 from .aco import build_pheromone_map, distance_from_start
-
-
-def _chebyshev(a: tuple[int, int], b: tuple[int, int]) -> int:
-    return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
-
-
-def _is_clear_of_neighbors(
-    cell: tuple[int, int], occupied: set[tuple[int, int]], min_chebyshev: int = 1
-) -> bool:
-    for other in occupied:
-        if _chebyshev(cell, other) <= min_chebyshev:
-            return False
-    return True
 
 
 def _weighted_choice_iterative(
@@ -35,7 +23,7 @@ def _weighted_choice_iterative(
 
     while available and len(selected) < k:
         eligible = [
-            c for c in available if _is_clear_of_neighbors(c, blocked, min_chebyshev)
+            c for c in available if is_clear_of_neighbors(c, blocked, min_chebyshev)
         ]
         if not eligible:
             break
@@ -129,7 +117,7 @@ def spawn_items(
         low_pheromone_score = 1.0 - pheromone[r, col]
         spread_bonus = 1.0
         if selected:
-            dmin = min(_chebyshev(c, other) for other in selected)
+            dmin = min(chebyshev(c, other) for other in selected)
             spread_bonus += 0.20 * min(dmin, 8)
         return 1.5 * edge_score + 1.0 * low_pheromone_score + spread_bonus
 
@@ -153,7 +141,7 @@ def spawn_items(
         low_pheromone_score = 1.0 - pheromone[r, col]
         spread_bonus = 1.0
         if selected:
-            dmin = min(_chebyshev(c, other) for other in selected)
+            dmin = min(chebyshev(c, other) for other in selected)
             spread_bonus += 0.25 * min(dmin, 10)
         return 0.8 * far_score + 0.7 * low_pheromone_score + spread_bonus
 

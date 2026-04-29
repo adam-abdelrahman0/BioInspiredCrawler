@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 
-from ca import Grid, apply_rule, flood_fill_largest
+from ca import Grid, run_ca_pipeline
 from entities import (
     EntityPlacement,
     render_entities_rgb,
@@ -12,13 +12,6 @@ from entities import (
     spawn_items,
     spawn_player,
 )
-
-# CA rule sets B5678/S45678
-# CAVE vs SMOOTH-- cave is generated with rough edges and smoothing happens with flood fill
-CAVE_BORN = frozenset({5, 6, 7, 8})
-CAVE_SURVIVE = frozenset({4, 5, 6, 7, 8})
-SMOOTH_BORN = frozenset({5, 6, 7, 8})
-SMOOTH_SURVIVE = frozenset({5, 6, 7, 8})
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -84,26 +77,6 @@ def visualize_entities(cave: Grid, entities: EntityPlacement) -> None:
     plt.savefig("output/ca_cave_entities.png", dpi=150, bbox_inches="tight")
     print("Figure saved to output/ca_cave_entities.png")
     plt.show()
-
-
-def run_ca_pipeline(
-    height: int,
-    width: int,
-    fill_prob: float,
-    ca_iterations: int,
-    smooth_iterations: int,
-    rng: np.random.Generator,
-) -> tuple[Grid, Grid, int]:
-
-    grid = Grid.random(height, width, fill_prob, rng)
-    grid = apply_rule(grid, CAVE_BORN, CAVE_SURVIVE, ca_iterations)
-
-    raw = grid.copy()
-
-    grid = apply_rule(grid, SMOOTH_BORN, SMOOTH_SURVIVE, smooth_iterations)
-    final, num_regions = flood_fill_largest(grid)
-
-    return raw, final, num_regions
 
 
 def main() -> None:

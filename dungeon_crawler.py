@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import yaml
 
-from ca import Grid, apply_rule, flood_fill_largest
+from ca import Grid, run_ca_pipeline
 from entities import spawn_enemies, spawn_items, spawn_player
 from entities.aco import distance_from_start
 
@@ -19,11 +19,6 @@ VIEWPORT_WIDTH = VIEW_TILES * TILE_SIZE
 VIEWPORT_HEIGHT = VIEW_TILES * TILE_SIZE
 HUD_HEIGHT = 150
 WINDOW_PADDING = 20
-
-CAVE_BORN = frozenset({5, 6, 7, 8})
-CAVE_SURVIVE = frozenset({4, 5, 6, 7, 8})
-SMOOTH_BORN = frozenset({5, 6, 7, 8})
-SMOOTH_SURVIVE = frozenset({5, 6, 7, 8})
 
 INITIAL_HEARTS = 3
 MAX_HEARTS = 5
@@ -172,8 +167,8 @@ class DungeonCrawlerGame:
         cfg["height"] = MAP_HEIGHT
         return cfg
 
-    # Runs the existing cellular automata cave pipeline until it finds a roomy connected cave.
-    def run_ca_pipeline(self) -> Grid:
+    # Runs the CA cave pipeline until it finds a roomy connected cave.
+    def generate_cave(self) -> Grid:
         height = self.cfg.get("height", MAP_HEIGHT)
         width = self.cfg.get("width", MAP_WIDTH)
         fill_prob = self.cfg.get("fill_prob", 0.45)
@@ -181,10 +176,9 @@ class DungeonCrawlerGame:
         smooth_iterations = self.cfg.get("smooth_iterations", 2)
 
         while True:
-            grid = Grid.random(height, width, fill_prob, self.rng)
-            grid = apply_rule(grid, CAVE_BORN, CAVE_SURVIVE, ca_iterations)
-            grid = apply_rule(grid, SMOOTH_BORN, SMOOTH_SURVIVE, smooth_iterations)
-            final, _ = flood_fill_largest(grid)
+            _raw, final, _regions = run_ca_pipeline(
+                height, width, fill_prob, ca_iterations, smooth_iterations, self.rng
+            )
             if int(final.data.sum()) > 600:
                 return final
 
@@ -201,7 +195,7 @@ class DungeonCrawlerGame:
     # Builds each level with the repo's cave generator and ACO-based entity placement helpers.
     def build_level_from_existing_modules(self) -> None:
         while True:
-            self.cave = self.run_ca_pipeline()
+            self.cave = self.generate_cave()
             player_pos = spawn_player(self.cave, self.rng)
             sword, shield, coins, food = spawn_items(
                 self.cave,

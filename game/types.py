@@ -29,3 +29,16 @@ class Item:
     kind: str
     row: int
     col: int
+
+
+@dataclass
+class BoidEnemy:
+    row: int
+    col: int
+    alive: bool = True
+    vel_row: float = 0.0
+    vel_col: float = 0.0
+    render_row: float = 0.0
+    render_col: float = 0.0
+    from_row: int = 0
+    from_col: int = 0

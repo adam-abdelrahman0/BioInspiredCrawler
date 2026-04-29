@@ -1,5 +1,6 @@
 import math
 import tkinter as tk
+from functools import lru_cache
 
 from .constants import (
     FLOOR_A,
@@ -13,44 +14,205 @@ from .constants import (
 )
 
 
+@lru_cache(maxsize=512)
+def _darken(color: str, factor: float) -> str:
+    r = int(color[1:3], 16)
+    g = int(color[3:5], 16)
+    b = int(color[5:7], 16)
+    return f"#{int(r * factor):02x}{int(g * factor):02x}{int(b * factor):02x}"
+
+
 def draw_floor(
-    canvas: tk.Canvas, x: int, y: int, row: int, col: int, tag: str = ""
+    canvas: tk.Canvas,
+    x: int,
+    y: int,
+    row: int,
+    col: int,
+    tag: str = "",
+    brightness: float = 1.0,
 ) -> None:
-    base = FLOOR_A if (row + col) % 2 == 0 else FLOOR_B
+    f = round(brightness, 2)
+    base = _darken(FLOOR_A if (row + col) % 2 == 0 else FLOOR_B, f)
     canvas.create_rectangle(
         x, y, x + TILE_SIZE, y + TILE_SIZE, fill=base, width=0, tags=tag
     )
-    canvas.create_line(x + 4, y + 8, x + 12, y + 8, fill="#5a636d", width=2, tags=tag)
     canvas.create_line(
-        x + 18, y + 15, x + 24, y + 13, fill="#5a636d", width=2, tags=tag
+        x + 4, y + 8, x + 12, y + 8, fill=_darken("#5a636d", f), width=2, tags=tag
     )
     canvas.create_line(
-        x + 10, y + 25, x + 12, y + 21, fill="#5a636d", width=2, tags=tag
+        x + 18, y + 15, x + 24, y + 13, fill=_darken("#5a636d", f), width=2, tags=tag
     )
+    canvas.create_line(
+        x + 10, y + 25, x + 12, y + 21, fill=_darken("#5a636d", f), width=2, tags=tag
+    )
+    variant = (row * 31 + col * 17) % 8
+    if variant == 5:
+        canvas.create_line(
+            x + 7, y + 3, x + 15, y + 19, fill=_darken("#363e47", f), width=1, tags=tag
+        )
+        canvas.create_line(
+            x + 15,
+            y + 19,
+            x + 11,
+            y + 29,
+            fill=_darken("#363e47", f),
+            width=1,
+            tags=tag,
+        )
+    elif variant == 6:
+        canvas.create_oval(
+            x + 9,
+            y + 13,
+            x + 22,
+            y + 21,
+            fill=_darken("#2a3340", f),
+            outline="",
+            tags=tag,
+        )
+        canvas.create_oval(
+            x + 12,
+            y + 15,
+            x + 18,
+            y + 19,
+            fill=_darken("#243040", f),
+            outline="",
+            tags=tag,
+        )
+    elif variant == 7:
+        canvas.create_oval(
+            x + 5,
+            y + 17,
+            x + 9,
+            y + 21,
+            fill=_darken("#3c4450", f),
+            outline="",
+            tags=tag,
+        )
+        canvas.create_oval(
+            x + 19,
+            y + 7,
+            x + 23,
+            y + 11,
+            fill=_darken("#3c4450", f),
+            outline="",
+            tags=tag,
+        )
+        canvas.create_oval(
+            x + 13,
+            y + 23,
+            x + 16,
+            y + 26,
+            fill=_darken("#3c4450", f),
+            outline="",
+            tags=tag,
+        )
 
 
 def draw_wall(
-    canvas: tk.Canvas, x: int, y: int, row: int, col: int, tag: str = ""
+    canvas: tk.Canvas,
+    x: int,
+    y: int,
+    row: int,
+    col: int,
+    tag: str = "",
+    brightness: float = 1.0,
 ) -> None:
+    f = round(brightness, 2)
     canvas.create_rectangle(
-        x, y, x + TILE_SIZE, y + TILE_SIZE, fill=WALL_A, width=0, tags=tag
+        x, y, x + TILE_SIZE, y + TILE_SIZE, fill=_darken(WALL_A, f), width=0, tags=tag
     )
     canvas.create_rectangle(
-        x, y + 22, x + TILE_SIZE, y + TILE_SIZE, fill=WALL_C, width=0, tags=tag
+        x,
+        y + 22,
+        x + TILE_SIZE,
+        y + TILE_SIZE,
+        fill=_darken(WALL_C, f),
+        width=0,
+        tags=tag,
     )
     canvas.create_rectangle(
-        x + 2, y + 4, x + 12, y + 12, fill=WALL_B, width=0, tags=tag
+        x + 2, y + 4, x + 12, y + 12, fill=_darken(WALL_B, f), width=0, tags=tag
     )
     canvas.create_rectangle(
-        x + 14, y + 3, x + 28, y + 11, fill=WALL_B, width=0, tags=tag
+        x + 14, y + 3, x + 28, y + 11, fill=_darken(WALL_B, f), width=0, tags=tag
     )
     if (row + col) % 2 == 0:
         canvas.create_rectangle(
-            x + 5, y + 16, x + 13, y + 20, fill="#313945", width=0, tags=tag
+            x + 5, y + 16, x + 13, y + 20, fill=_darken("#313945", f), width=0, tags=tag
         )
     else:
         canvas.create_rectangle(
-            x + 18, y + 16, x + 27, y + 20, fill="#313945", width=0, tags=tag
+            x + 18,
+            y + 16,
+            x + 27,
+            y + 20,
+            fill=_darken("#313945", f),
+            width=0,
+            tags=tag,
+        )
+    variant = (row * 31 + col * 17) % 8
+    if variant == 5:
+        canvas.create_oval(
+            x + 3,
+            y + 12,
+            x + 10,
+            y + 19,
+            fill=_darken("#2e4035", f),
+            outline="",
+            tags=tag,
+        )
+        canvas.create_oval(
+            x + 17,
+            y + 6,
+            x + 27,
+            y + 13,
+            fill=_darken("#2e4035", f),
+            outline="",
+            tags=tag,
+        )
+        canvas.create_oval(
+            x + 8,
+            y + 18,
+            x + 14,
+            y + 22,
+            fill=_darken("#364838", f),
+            outline="",
+            tags=tag,
+        )
+    elif variant == 6:
+        canvas.create_line(
+            x + 21, y, x + 23, y + 12, fill=_darken("#162430", f), width=2, tags=tag
+        )
+        canvas.create_oval(
+            x + 19,
+            y + 11,
+            x + 25,
+            y + 16,
+            fill=_darken("#162430", f),
+            outline="",
+            tags=tag,
+        )
+        canvas.create_line(
+            x + 22,
+            y + 15,
+            x + 24,
+            y + 22,
+            fill=_darken("#162430", f),
+            width=1,
+            tags=tag,
+        )
+    elif variant == 7:
+        canvas.create_line(
+            x + 9, y + 1, x + 13, y + 15, fill=_darken("#0f1318", f), width=1, tags=tag
+        )
+        canvas.create_line(
+            x + 13,
+            y + 15,
+            x + 17,
+            y + 21,
+            fill=_darken("#0f1318", f),
+            width=1,
+            tags=tag,
         )
 
 

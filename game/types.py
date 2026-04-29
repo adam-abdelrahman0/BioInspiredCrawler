@@ -22,6 +22,17 @@ class Player:
     row: int
     col: int
     facing: str = "down"
+    render_row: float = 0.0
+    render_col: float = 0.0
+    from_row: float = 0.0
+    from_col: float = 0.0
+    move_start_ms: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.render_row = float(self.row)
+        self.render_col = float(self.col)
+        self.from_row = float(self.row)
+        self.from_col = float(self.col)
 
 
 @dataclass

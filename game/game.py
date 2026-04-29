@@ -27,6 +27,8 @@ from .constants import (
     ITEM_SHIELD,
     ITEM_SWORD,
     LEVEL_COMPLETE_MS,
+    LIGHT_RADIUS,
+    PLAYER_MOVE_MS,
     MAP_HEIGHT,
     MAP_WIDTH,
     MAX_HEARTS,
@@ -57,6 +59,8 @@ from .sprites import (
     draw_wall,
 )
 from .types import BoidEnemy, Enemy, Item, Player
+
+_FOG_START = LIGHT_RADIUS - 3.0  # distance at which darkening begins
 
 
 class DungeonCrawlerGame:
@@ -93,6 +97,7 @@ class DungeonCrawlerGame:
         self.canvas.pack()
 
         self.root.bind("<KeyPress>", self.on_key_press)
+        self.root.bind("<KeyRelease>", self.on_key_release)
         self.canvas.bind("<Button-1>", self.on_click)
 
         self.cfg = self._load_config()
@@ -122,6 +127,7 @@ class DungeonCrawlerGame:
         self.last_tick = 0.0
         self.enemy_accumulator = 0.0
         self.boid_accumulator = 0.0
+        self.held_direction: str | None = None
 
     # ------------------------------------------------------------------ config
 
@@ -279,9 +285,20 @@ class DungeonCrawlerGame:
             return
         key = event.keysym
         if key in MOVE_KEYS:
-            self._try_move_player(MOVE_KEYS[key])
+            direction = MOVE_KEYS[key]
+            self.held_direction = direction
+            # Only start a move if the current animation has finished — otherwise
+            # the auto-chain in _update_player_render will pick it up next frame.
+            elapsed = self._now_ms() - self.player.move_start_ms
+            if elapsed >= PLAYER_MOVE_MS:
+                self._try_move_player(direction)
         elif event.keysym.lower() in ATTACK_KEYS:
             self._swing_sword()
+
+    def on_key_release(self, event: tk.Event) -> None:
+        key = event.keysym
+        if key in MOVE_KEYS and self.held_direction == MOVE_KEYS[key]:
+            self.held_direction = None
 
     def on_click(self, _event: tk.Event) -> None:
         if self.screen in {"start", "gameover"}:
@@ -296,8 +313,11 @@ class DungeonCrawlerGame:
         next_col = self.player.col + dc
         if not self._is_walkable(next_row, next_col):
             return
+        self.player.from_row = self.player.render_row
+        self.player.from_col = self.player.render_col
         self.player.row = next_row
         self.player.col = next_col
+        self.player.move_start_ms = self._now_ms()
         self._pick_up_items()
         self._check_enemy_collisions()
         self._check_exit_reached()
@@ -489,6 +509,21 @@ class DungeonCrawlerGame:
             enemy.render_row = enemy.from_row + (enemy.row - enemy.from_row) * progress
             enemy.render_col = enemy.from_col + (enemy.col - enemy.from_col) * progress
 
+    # ---------------------------------------------------------- player animation
+
+    def _update_player_render(self) -> None:
+        if self.player is None:
+            return
+        t = min(1.0, (self._now_ms() - self.player.move_start_ms) / PLAYER_MOVE_MS)
+        self.player.render_row = (
+            self.player.from_row + (self.player.row - self.player.from_row) * t
+        )
+        self.player.render_col = (
+            self.player.from_col + (self.player.col - self.player.from_col) * t
+        )
+        if t >= 1.0 and self.held_direction is not None:
+            self._try_move_player(self.held_direction)
+
     # --------------------------------------------------------------- game loop
 
     def update(self) -> None:
@@ -501,6 +536,7 @@ class DungeonCrawlerGame:
         if self.screen == "playing":
             self._move_enemies(delta)
             self._move_boids(delta)
+            self._update_player_render()
         elif self.screen == "levelcomplete" and now >= self.level_complete_end:
             self.level += 1
             self._start_level()
@@ -575,10 +611,29 @@ class DungeonCrawlerGame:
                 col = cam_col + view_c
                 x = self.world_left + view_c * TILE_SIZE
                 y = top + view_r * TILE_SIZE
+                dist = math.sqrt(
+                    (row - self.player.render_row) ** 2
+                    + (col - self.player.render_col) ** 2
+                )
+                if dist >= LIGHT_RADIUS:
+                    self.canvas.create_rectangle(
+                        x,
+                        y,
+                        x + TILE_SIZE,
+                        y + TILE_SIZE,
+                        fill=BG,
+                        width=0,
+                        tags="world",
+                    )
+                    continue
+                brightness = max(
+                    0.0,
+                    1.0 - max(0.0, dist - _FOG_START) / (LIGHT_RADIUS - _FOG_START),
+                )
                 if self.cave.data[row, col] == 1:
-                    draw_floor(self.canvas, x, y, row, col, "world")
+                    draw_floor(self.canvas, x, y, row, col, "world", brightness)
                 else:
-                    draw_wall(self.canvas, x, y, row, col, "world")
+                    draw_wall(self.canvas, x, y, row, col, "world", brightness)
 
         exit_row, exit_col = self.exit_tile
         if (
@@ -655,8 +710,8 @@ class DungeonCrawlerGame:
         elif now >= self.attack_end:
             self.attack_tile = None
 
-        px = self.world_left + (self.player.col - cam_col) * TILE_SIZE
-        py = top + (self.player.row - cam_row) * TILE_SIZE
+        px = self.world_left + round((self.player.render_col - cam_col) * TILE_SIZE)
+        py = top + round((self.player.render_row - cam_row) * TILE_SIZE)
         if now < self.flash_end and int(now / 80) % 2 == 0:
             self.canvas.create_rectangle(
                 px,
@@ -767,6 +822,60 @@ class DungeonCrawlerGame:
             fill=TEXT,
             font=("Trebuchet MS", 16, "bold"),
             text=str(self.total_stars),
+        )
+        if self.screen == "playing":
+            self._draw_exit_compass()
+
+    def _draw_exit_compass(self) -> None:
+        if self.player is None or self.exit_tile is None:
+            return
+        cx = self.window_width - 52
+        cy = 57
+        r = 18
+
+        dr = self.exit_tile[0] - self.player.row
+        dc = self.exit_tile[1] - self.player.col
+        dist_tiles = math.sqrt(dr * dr + dc * dc)
+
+        self.canvas.create_text(
+            cx,
+            28,
+            anchor="n",
+            fill=TEXT_MUTED,
+            font=("Trebuchet MS", 10, "bold"),
+            text="EXIT",
+        )
+        self.canvas.create_oval(
+            cx - r, cy - r, cx + r, cy + r, fill="#0f1a14", outline="#2a5c3a", width=2
+        )
+
+        if dist_tiles > 0:
+            norm_r = dr / dist_tiles
+            norm_c = dc / dist_tiles
+            tip_x = cx + (r - 4) * norm_c
+            tip_y = cy + (r - 4) * norm_r
+            base_x = cx - 5 * norm_c
+            base_y = cy - 5 * norm_r
+            perp_x = -norm_r * 4
+            perp_y = norm_c * 4
+            self.canvas.create_polygon(
+                tip_x,
+                tip_y,
+                base_x + perp_x,
+                base_y + perp_y,
+                base_x - perp_x,
+                base_y - perp_y,
+                fill="#67da86",
+                outline="",
+            )
+
+        self.canvas.create_text(
+            cx,
+            cy + r + 6,
+            anchor="n",
+            fill="#67da86",
+            font=("Trebuchet MS", 10, "bold"),
+            text=f"{int(dist_tiles)}t",
         )
 
     def _draw_start_screen(self) -> None:

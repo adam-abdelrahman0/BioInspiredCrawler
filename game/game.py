@@ -7,10 +7,13 @@ import yaml
 from ca import Grid, run_ca_pipeline
 from entities import spawn_enemies, spawn_items, spawn_player
 from entities.aco import distance_from_start
+from entities.boids import boids_step, spawn_boid_swarm
 
 from .constants import (
     ATTACK_KEYS,
     BG,
+    BOID_COUNT,
+    BOID_MOVE_MS,
     COIN_COUNT,
     DIRECTIONS,
     ENEMY_COUNT,
@@ -24,6 +27,8 @@ from .constants import (
     ITEM_SHIELD,
     ITEM_SWORD,
     LEVEL_COMPLETE_MS,
+    LIGHT_RADIUS,
+    PLAYER_MOVE_MS,
     MAP_HEIGHT,
     MAP_WIDTH,
     MAX_HEARTS,
@@ -39,7 +44,9 @@ from .constants import (
     VIEWPORT_WIDTH,
     WINDOW_PADDING,
 )
+from .map_export import save_level_map_png
 from .sprites import (
+    draw_boid_enemy,
     draw_coin,
     draw_enemy,
     draw_exit,
@@ -52,7 +59,9 @@ from .sprites import (
     draw_sword,
     draw_wall,
 )
-from .types import Enemy, Item, Player
+from .types import BoidEnemy, Enemy, Item, Player
+
+_FOG_START = LIGHT_RADIUS - 3.0  # distance at which darkening begins
 
 
 class DungeonCrawlerGame:
@@ -65,10 +74,14 @@ class DungeonCrawlerGame:
 
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-        horizontal_scale = max(1.0, (screen_width - (WINDOW_PADDING * 2)) / VIEWPORT_WIDTH)
+        horizontal_scale = max(
+            1.0, (screen_width - (WINDOW_PADDING * 2)) / VIEWPORT_WIDTH
+        )
         vertical_scale = max(1.0, (screen_height - HUD_HEIGHT - 160) / VIEWPORT_HEIGHT)
         self.render_scale = min(horizontal_scale, vertical_scale)
-        self.window_width = int(VIEWPORT_WIDTH * self.render_scale) + (WINDOW_PADDING * 2)
+        self.window_width = int(VIEWPORT_WIDTH * self.render_scale) + (
+            WINDOW_PADDING * 2
+        )
         self.viewport_width = self.window_width - (WINDOW_PADDING * 2)
         self.viewport_height = int(VIEWPORT_HEIGHT * self.render_scale)
         self.window_height = HUD_HEIGHT + self.viewport_height
@@ -85,6 +98,7 @@ class DungeonCrawlerGame:
         self.canvas.pack()
 
         self.root.bind("<KeyPress>", self.on_key_press)
+        self.root.bind("<KeyRelease>", self.on_key_release)
         self.canvas.bind("<Button-1>", self.on_click)
 
         self.cfg = self._load_config()
@@ -105,6 +119,7 @@ class DungeonCrawlerGame:
         self.exit_tile: tuple[int, int] | None = None
         self.items: list[Item] = []
         self.enemies: list[Enemy] = []
+        self.boid_enemies: list[BoidEnemy] = []
         self.flash_end = 0.0
         self.attack_end = 0.0
         self.attack_tile: tuple[int, int] | None = None
@@ -112,6 +127,8 @@ class DungeonCrawlerGame:
 
         self.last_tick = 0.0
         self.enemy_accumulator = 0.0
+        self.boid_accumulator = 0.0
+        self.held_direction: str | None = None
 
     # ------------------------------------------------------------------ config
 
@@ -152,19 +169,32 @@ class DungeonCrawlerGame:
             self.cave = self.generate_cave()
             player_pos = spawn_player(self.cave, self.rng)
             sword, shield, coins, food = spawn_items(
-                self.cave, player_pos, self.rng,
-                coin_count=COIN_COUNT, food_count=FOOD_COUNT,
+                self.cave,
+                player_pos,
+                self.rng,
+                coin_count=COIN_COUNT,
+                food_count=FOOD_COUNT,
             )
             blocked = {player_pos, sword, shield, *coins, *food}
             enemy_positions = spawn_enemies(
-                self.cave, player_pos, blocked=blocked,
-                coin_positions=coins, rng=self.rng, enemy_count=ENEMY_COUNT,
+                self.cave,
+                player_pos,
+                blocked=blocked,
+                coin_positions=coins,
+                rng=self.rng,
+                enemy_count=ENEMY_COUNT,
             )
-            if len(coins) == COIN_COUNT and len(food) == FOOD_COUNT and len(enemy_positions) == ENEMY_COUNT:
+            if (
+                len(coins) == COIN_COUNT
+                and len(food) == FOOD_COUNT
+                and len(enemy_positions) == ENEMY_COUNT
+            ):
                 break
 
+        all_blocked = blocked | set(enemy_positions)
+
         exit_tile = self._choose_exit_tile(self.cave, player_pos)
-        if exit_tile in blocked or exit_tile in set(enemy_positions):
+        if exit_tile in all_blocked:
             dist = distance_from_start(self.cave, player_pos)
             floor_cells = np.argwhere(self.cave.data == 1)
             ordered = sorted(
@@ -172,11 +202,18 @@ class DungeonCrawlerGame:
                 key=lambda cell: dist[cell[0], cell[1]],
                 reverse=True,
             )
-            occupied = blocked | set(enemy_positions)
             for cell in ordered:
-                if cell not in occupied:
+                if cell not in all_blocked:
                     exit_tile = cell
                     break
+
+        boid_positions = spawn_boid_swarm(
+            self.cave,
+            center=exit_tile,
+            blocked=all_blocked | {exit_tile},
+            rng=self.rng,
+            count=BOID_COUNT,
+        )
 
         self.player = Player(*player_pos)
         self.exit_tile = exit_tile
@@ -184,16 +221,41 @@ class DungeonCrawlerGame:
         self.items.extend(Item(ITEM_COIN, *coin) for coin in coins)
         self.items.extend(Item(ITEM_FOOD, *meal) for meal in food)
         self.enemies = [self._make_enemy(row, col) for row, col in enemy_positions]
+        self.boid_enemies = [
+            BoidEnemy(
+                row=r,
+                col=c,
+                render_row=float(r),
+                render_col=float(c),
+                from_row=r,
+                from_col=c,
+            )
+            for r, c in boid_positions
+        ]
+        # Exports a full-level reference PNG so the generated cave and placements can be inspected outside the game window.
+        save_level_map_png(
+            cave=self.cave,
+            player=self.player,
+            exit_tile=self.exit_tile,
+            items=self.items,
+            enemies=self.enemies,
+            swarm_enemies=self.boid_enemies,
+            level=self.level,
+        )
 
     def _make_enemy(self, row: int, col: int) -> Enemy:
         return Enemy(
-            row=row, col=col,
-            origin_row=row, origin_col=col,
+            row=row,
+            col=col,
+            origin_row=row,
+            origin_col=col,
             axis="horizontal" if self.rng.random() < 0.5 else "vertical",
             radius=int(self.rng.integers(2, 4)),
             direction=-1 if self.rng.random() < 0.5 else 1,
-            render_row=float(row), render_col=float(col),
-            from_row=row, from_col=col,
+            render_row=float(row),
+            render_col=float(col),
+            from_row=row,
+            from_col=col,
         )
 
     # ---------------------------------------------------------- game lifecycle
@@ -219,6 +281,7 @@ class DungeonCrawlerGame:
         self.sword_equipped = False
         self.shield_equipped = False
         self.enemy_accumulator = 0.0
+        self.boid_accumulator = 0.0
         self.attack_tile = None
         self.attack_end = 0.0
         self._build_level()
@@ -233,9 +296,20 @@ class DungeonCrawlerGame:
             return
         key = event.keysym
         if key in MOVE_KEYS:
-            self._try_move_player(MOVE_KEYS[key])
+            direction = MOVE_KEYS[key]
+            self.held_direction = direction
+            # Only start a move if the current animation has finished — otherwise
+            # the auto-chain in _update_player_render will pick it up next frame.
+            elapsed = self._now_ms() - self.player.move_start_ms
+            if elapsed >= PLAYER_MOVE_MS:
+                self._try_move_player(direction)
         elif event.keysym.lower() in ATTACK_KEYS:
             self._swing_sword()
+
+    def on_key_release(self, event: tk.Event) -> None:
+        key = event.keysym
+        if key in MOVE_KEYS and self.held_direction == MOVE_KEYS[key]:
+            self.held_direction = None
 
     def on_click(self, _event: tk.Event) -> None:
         if self.screen in {"start", "gameover"}:
@@ -250,8 +324,11 @@ class DungeonCrawlerGame:
         next_col = self.player.col + dc
         if not self._is_walkable(next_row, next_col):
             return
+        self.player.from_row = self.player.render_row
+        self.player.from_col = self.player.render_col
         self.player.row = next_row
         self.player.col = next_col
+        self.player.move_start_ms = self._now_ms()
         self._pick_up_items()
         self._check_enemy_collisions()
         self._check_exit_reached()
@@ -269,7 +346,12 @@ class DungeonCrawlerGame:
             if enemy.alive and (enemy.row, enemy.col) == target:
                 enemy.alive = False
                 self.enemies_killed += 1
-                break
+                return
+        for enemy in self.boid_enemies:
+            if enemy.alive and (enemy.row, enemy.col) == target:
+                enemy.alive = False
+                self.enemies_killed += 1
+                return
 
     def _pick_up_items(self) -> None:
         assert self.player is not None
@@ -290,9 +372,9 @@ class DungeonCrawlerGame:
 
     def _check_enemy_collisions(self) -> None:
         assert self.player is not None
-        if any(
-            enemy.alive and (enemy.row, enemy.col) == (self.player.row, self.player.col)
-            for enemy in self.enemies
+        pr, pc = self.player.row, self.player.col
+        if any(e.alive and (e.row, e.col) == (pr, pc) for e in self.enemies) or any(
+            e.alive and (e.row, e.col) == (pr, pc) for e in self.boid_enemies
         ):
             self._damage_player()
 
@@ -314,7 +396,7 @@ class DungeonCrawlerGame:
         stars = 1
         if self.coins_found == COIN_COUNT:
             stars += 1
-        if self.enemies_killed == ENEMY_COUNT:
+        if self.enemies_killed == ENEMY_COUNT + len(self.boid_enemies):
             stars += 1
         self.total_stars += stars
         self.level_stars = stars
@@ -335,11 +417,16 @@ class DungeonCrawlerGame:
                 if not enemy.alive:
                     continue
                 living_positions.discard((enemy.row, enemy.col))
-                dr, dc = (0, enemy.direction) if enemy.axis == "horizontal" else (enemy.direction, 0)
+                dr, dc = (
+                    (0, enemy.direction)
+                    if enemy.axis == "horizontal"
+                    else (enemy.direction, 0)
+                )
                 next_row = enemy.row + dr
                 next_col = enemy.col + dc
                 origin_delta = (
-                    next_col - enemy.origin_col if enemy.axis == "horizontal"
+                    next_col - enemy.origin_col
+                    if enemy.axis == "horizontal"
                     else next_row - enemy.origin_row
                 )
                 blocked = (
@@ -349,11 +436,16 @@ class DungeonCrawlerGame:
                 )
                 if blocked:
                     enemy.direction *= -1
-                    dr, dc = (0, enemy.direction) if enemy.axis == "horizontal" else (enemy.direction, 0)
+                    dr, dc = (
+                        (0, enemy.direction)
+                        if enemy.axis == "horizontal"
+                        else (enemy.direction, 0)
+                    )
                     next_row = enemy.row + dr
                     next_col = enemy.col + dc
                     origin_delta = (
-                        next_col - enemy.origin_col if enemy.axis == "horizontal"
+                        next_col - enemy.origin_col
+                        if enemy.axis == "horizontal"
                         else next_row - enemy.origin_row
                     )
                     if (
@@ -382,6 +474,67 @@ class DungeonCrawlerGame:
             enemy.render_row = enemy.from_row + (enemy.row - enemy.from_row) * progress
             enemy.render_col = enemy.from_col + (enemy.col - enemy.from_col) * progress
 
+    # ------------------------------------------------------------ boid movement
+
+    def _move_boids(self, delta_ms: float) -> None:
+        assert self.cave is not None
+        assert self.player is not None
+
+        self.boid_accumulator += delta_ms
+        while self.boid_accumulator >= BOID_MOVE_MS:
+            self.boid_accumulator -= BOID_MOVE_MS
+
+            positions = np.array(
+                [[e.row, e.col] for e in self.boid_enemies], dtype=float
+            )
+            velocities = np.array(
+                [[e.vel_row, e.vel_col] for e in self.boid_enemies], dtype=float
+            )
+            alive = np.array([e.alive for e in self.boid_enemies], dtype=bool)
+
+            new_pos, new_vel, from_pos = boids_step(
+                positions,
+                velocities,
+                alive,
+                (self.player.row, self.player.col),
+                self.cave,
+                self.rng,
+            )
+
+            for i, enemy in enumerate(self.boid_enemies):
+                if not enemy.alive:
+                    continue
+                enemy.from_row = int(from_pos[i, 0])
+                enemy.from_col = int(from_pos[i, 1])
+                enemy.row = int(new_pos[i, 0])
+                enemy.col = int(new_pos[i, 1])
+                enemy.vel_row = float(new_vel[i, 0])
+                enemy.vel_col = float(new_vel[i, 1])
+                if (enemy.row, enemy.col) == (self.player.row, self.player.col):
+                    self._damage_player()
+
+        progress = min(1.0, self.boid_accumulator / BOID_MOVE_MS)
+        for enemy in self.boid_enemies:
+            if not enemy.alive:
+                continue
+            enemy.render_row = enemy.from_row + (enemy.row - enemy.from_row) * progress
+            enemy.render_col = enemy.from_col + (enemy.col - enemy.from_col) * progress
+
+    # ---------------------------------------------------------- player animation
+
+    def _update_player_render(self) -> None:
+        if self.player is None:
+            return
+        t = min(1.0, (self._now_ms() - self.player.move_start_ms) / PLAYER_MOVE_MS)
+        self.player.render_row = (
+            self.player.from_row + (self.player.row - self.player.from_row) * t
+        )
+        self.player.render_col = (
+            self.player.from_col + (self.player.col - self.player.from_col) * t
+        )
+        if t >= 1.0 and self.held_direction is not None:
+            self._try_move_player(self.held_direction)
+
     # --------------------------------------------------------------- game loop
 
     def update(self) -> None:
@@ -393,6 +546,8 @@ class DungeonCrawlerGame:
 
         if self.screen == "playing":
             self._move_enemies(delta)
+            self._move_boids(delta)
+            self._update_player_render()
         elif self.screen == "levelcomplete" and now >= self.level_complete_end:
             self.level += 1
             self._start_level()
@@ -428,13 +583,28 @@ class DungeonCrawlerGame:
             )
 
     def _draw_background(self) -> None:
-        self.canvas.create_rectangle(0, 0, self.window_width, self.window_height, fill=BG, width=0)
-        self.canvas.create_rectangle(10, 10, self.window_width - 10, HUD_HEIGHT - 10, fill=PANEL, outline=PANEL_EDGE, width=2)
-        self.canvas.create_rectangle(0, HUD_HEIGHT, self.window_width, self.window_height, fill=SHADOW, width=0)
         self.canvas.create_rectangle(
-            self.world_left - 4, HUD_HEIGHT - 4,
-            self.world_left + self.viewport_width + 4, HUD_HEIGHT + self.viewport_height + 4,
-            outline=PANEL_EDGE, width=2,
+            0, 0, self.window_width, self.window_height, fill=BG, width=0
+        )
+        self.canvas.create_rectangle(
+            10,
+            10,
+            self.window_width - 10,
+            HUD_HEIGHT - 10,
+            fill=PANEL,
+            outline=PANEL_EDGE,
+            width=2,
+        )
+        self.canvas.create_rectangle(
+            0, HUD_HEIGHT, self.window_width, self.window_height, fill=SHADOW, width=0
+        )
+        self.canvas.create_rectangle(
+            self.world_left - 4,
+            HUD_HEIGHT - 4,
+            self.world_left + self.viewport_width + 4,
+            HUD_HEIGHT + self.viewport_height + 4,
+            outline=PANEL_EDGE,
+            width=2,
         )
 
     def _draw_world(self) -> None:
@@ -443,31 +613,57 @@ class DungeonCrawlerGame:
         assert self.exit_tile is not None
 
         cam_row, cam_col = self._get_camera_origin()
+        frac_row = cam_row - math.floor(cam_row)
+        frac_col = cam_col - math.floor(cam_col)
+        tile_row0 = int(math.floor(cam_row))
+        tile_col0 = int(math.floor(cam_col))
         top = HUD_HEIGHT
         now = self._now_ms()
 
-        for view_r in range(VIEW_TILES):
-            for view_c in range(VIEW_TILES):
-                row = cam_row + view_r
-                col = cam_col + view_c
-                x = self.world_left + view_c * TILE_SIZE
-                y = top + view_r * TILE_SIZE
-                if self.cave.data[row, col] == 1:
-                    draw_floor(self.canvas, x, y, row, col, "world")
+        for view_r in range(VIEW_TILES + 2):
+            for view_c in range(VIEW_TILES + 2):
+                tile_row = tile_row0 + view_r
+                tile_col = tile_col0 + view_c
+                if not (0 <= tile_row < MAP_HEIGHT and 0 <= tile_col < MAP_WIDTH):
+                    continue
+                x = self.world_left + (view_c - frac_col) * TILE_SIZE
+                y = top + (view_r - frac_row) * TILE_SIZE
+                dist = math.sqrt(
+                    (tile_row - self.player.render_row) ** 2
+                    + (tile_col - self.player.render_col) ** 2
+                )
+                if dist >= LIGHT_RADIUS:
+                    self.canvas.create_rectangle(
+                        x, y, x + TILE_SIZE, y + TILE_SIZE, fill=BG, width=0, tags="world"
+                    )
+                    continue
+                brightness = max(
+                    0.0,
+                    1.0 - max(0.0, dist - _FOG_START) / (LIGHT_RADIUS - _FOG_START),
+                )
+                if self.cave.data[tile_row, tile_col] == 1:
+                    draw_floor(self.canvas, x, y, tile_row, tile_col, "world", brightness)
                 else:
-                    draw_wall(self.canvas, x, y, row, col, "world")
+                    draw_wall(self.canvas, x, y, tile_row, tile_col, "world", brightness)
 
         exit_row, exit_col = self.exit_tile
-        if cam_row <= exit_row < cam_row + VIEW_TILES and cam_col <= exit_col < cam_col + VIEW_TILES:
+        if (
+            cam_row - 1 <= exit_row < cam_row + VIEW_TILES + 1
+            and cam_col - 1 <= exit_col < cam_col + VIEW_TILES + 1
+        ):
             draw_exit(
                 self.canvas,
                 self.world_left + (exit_col - cam_col) * TILE_SIZE,
                 top + (exit_row - cam_row) * TILE_SIZE,
-                now, "world",
+                now,
+                "world",
             )
 
         for item in self.items:
-            if not (cam_row <= item.row < cam_row + VIEW_TILES and cam_col <= item.col < cam_col + VIEW_TILES):
+            if not (
+                cam_row - 1 <= item.row < cam_row + VIEW_TILES + 1
+                and cam_col - 1 <= item.col < cam_col + VIEW_TILES + 1
+            ):
                 continue
             x = self.world_left + (item.col - cam_col) * TILE_SIZE
             y = top + (item.row - cam_row) * TILE_SIZE
@@ -484,74 +680,237 @@ class DungeonCrawlerGame:
             if not enemy.alive:
                 continue
             if not (
-                cam_row <= enemy.render_row < cam_row + VIEW_TILES
-                and cam_col <= enemy.render_col < cam_col + VIEW_TILES
+                cam_row - 1 <= enemy.render_row < cam_row + VIEW_TILES + 1
+                and cam_col - 1 <= enemy.render_col < cam_col + VIEW_TILES + 1
             ):
                 continue
-            x = self.world_left + int(round((enemy.render_col - cam_col) * TILE_SIZE))
-            y = top + int(round((enemy.render_row - cam_row) * TILE_SIZE))
+            x = self.world_left + (enemy.render_col - cam_col) * TILE_SIZE
+            y = top + (enemy.render_row - cam_row) * TILE_SIZE
             draw_enemy(self.canvas, x, y, "world")
+
+        for enemy in self.boid_enemies:
+            if not enemy.alive:
+                continue
+            if not (
+                cam_row - 1 <= enemy.render_row < cam_row + VIEW_TILES + 1
+                and cam_col - 1 <= enemy.render_col < cam_col + VIEW_TILES + 1
+            ):
+                continue
+            x = self.world_left + (enemy.render_col - cam_col) * TILE_SIZE
+            y = top + (enemy.render_row - cam_row) * TILE_SIZE
+            draw_boid_enemy(self.canvas, x, y, "world")
 
         if self.attack_tile and now < self.attack_end:
             attack_row, attack_col = self.attack_tile
-            if cam_row <= attack_row < cam_row + VIEW_TILES and cam_col <= attack_col < cam_col + VIEW_TILES:
+            if (
+                cam_row - 1 <= attack_row < cam_row + VIEW_TILES + 1
+                and cam_col - 1 <= attack_col < cam_col + VIEW_TILES + 1
+            ):
                 x = self.world_left + (attack_col - cam_col) * TILE_SIZE
                 y = top + (attack_row - cam_row) * TILE_SIZE
                 color = "#f9e9a4" if self.sword_equipped else "#909090"
-                self.canvas.create_rectangle(x + 5, y + 5, x + TILE_SIZE - 5, y + TILE_SIZE - 5, outline=color, width=2, tags="world")
+                self.canvas.create_rectangle(
+                    x + 5, y + 5, x + TILE_SIZE - 5, y + TILE_SIZE - 5,
+                    outline=color, width=2, tags="world",
+                )
         elif now >= self.attack_end:
             self.attack_tile = None
 
-        px = self.world_left + (self.player.col - cam_col) * TILE_SIZE
-        py = top + (self.player.row - cam_row) * TILE_SIZE
+        px = self.world_left + (self.player.render_col - cam_col) * TILE_SIZE
+        py = top + (self.player.render_row - cam_row) * TILE_SIZE
         if now < self.flash_end and int(now / 80) % 2 == 0:
-            self.canvas.create_rectangle(px, py, px + TILE_SIZE, py + TILE_SIZE, fill="#f4f4f4", width=0, tags="world")
+            self.canvas.create_rectangle(
+                px, py, px + TILE_SIZE, py + TILE_SIZE,
+                fill="#f4f4f4", width=0, tags="world",
+            )
         draw_player(self.canvas, px, py, self.player.facing, "world")
 
-        self.canvas.scale("world", self.world_left, HUD_HEIGHT, self.render_scale, self.render_scale)
+        self.canvas.scale(
+            "world", self.world_left, HUD_HEIGHT, self.render_scale, self.render_scale
+        )
+        # Mask tiles that bled into the viewport padding due to sub-tile camera offset
+        self.canvas.create_rectangle(
+            0, HUD_HEIGHT, self.world_left, self.window_height, fill=BG, width=0
+        )
+        self.canvas.create_rectangle(
+            self.world_left + self.viewport_width, HUD_HEIGHT,
+            self.window_width, self.window_height, fill=BG, width=0,
+        )
         self.canvas.create_text(
-            self.world_left, HUD_HEIGHT + 16,
-            anchor="w", fill="#dce5ef",
+            self.world_left,
+            HUD_HEIGHT + 16,
+            anchor="w",
+            fill="#dce5ef",
             font=("Trebuchet MS", 12, "bold"),
             text=f"Level {self.level}",
         )
 
     def _draw_hud(self) -> None:
-        self.canvas.create_text(20, 28, anchor="w", fill=TEXT_MUTED, font=("Trebuchet MS", 10, "bold"), text="HEARTS")
+        self.canvas.create_text(
+            20,
+            28,
+            anchor="w",
+            fill=TEXT_MUTED,
+            font=("Trebuchet MS", 10, "bold"),
+            text="HEARTS",
+        )
         heart_x = 18
         for _ in range(self.hearts):
             draw_heart_icon(self.canvas, heart_x, 42)
             heart_x += 26
 
-        self.canvas.create_text(160, 28, anchor="w", fill=TEXT_MUTED, font=("Trebuchet MS", 10, "bold"), text="COINS")
-        self.canvas.create_text(160, 52, anchor="w", fill=TEXT, font=("Trebuchet MS", 16, "bold"), text=f"{self.coins_found} / {COIN_COUNT}")
+        self.canvas.create_text(
+            160,
+            28,
+            anchor="w",
+            fill=TEXT_MUTED,
+            font=("Trebuchet MS", 10, "bold"),
+            text="COINS",
+        )
+        self.canvas.create_text(
+            160,
+            52,
+            anchor="w",
+            fill=TEXT,
+            font=("Trebuchet MS", 16, "bold"),
+            text=f"{self.coins_found} / {COIN_COUNT}",
+        )
 
-        self.canvas.create_text(250, 28, anchor="w", fill=TEXT_MUTED, font=("Trebuchet MS", 10, "bold"), text="ENEMIES")
-        self.canvas.create_text(250, 52, anchor="w", fill=TEXT, font=("Trebuchet MS", 16, "bold"), text=f"{self.enemies_killed} / {ENEMY_COUNT}")
+        self.canvas.create_text(
+            250,
+            28,
+            anchor="w",
+            fill=TEXT_MUTED,
+            font=("Trebuchet MS", 10, "bold"),
+            text="ENEMIES",
+        )
+        self.canvas.create_text(
+            250,
+            52,
+            anchor="w",
+            fill=TEXT,
+            font=("Trebuchet MS", 16, "bold"),
+            text=f"{self.enemies_killed} / {ENEMY_COUNT + len(self.boid_enemies)}",
+        )
 
-        self.canvas.create_text(20, 108, anchor="w", fill=TEXT_MUTED, font=("Trebuchet MS", 10, "bold"), text="SWORD")
+        self.canvas.create_text(
+            20,
+            108,
+            anchor="w",
+            fill=TEXT_MUTED,
+            font=("Trebuchet MS", 10, "bold"),
+            text="SWORD",
+        )
         if self.sword_equipped:
             draw_sword(self.canvas, 78, 92)
 
-        self.canvas.create_text(140, 108, anchor="w", fill=TEXT_MUTED, font=("Trebuchet MS", 10, "bold"), text="SHIELD")
+        self.canvas.create_text(
+            140,
+            108,
+            anchor="w",
+            fill=TEXT_MUTED,
+            font=("Trebuchet MS", 10, "bold"),
+            text="SHIELD",
+        )
         if self.shield_equipped:
             draw_shield(self.canvas, 208, 90)
 
-        self.canvas.create_text(265, 108, anchor="w", fill=TEXT_MUTED, font=("Trebuchet MS", 10, "bold"), text="STARS")
+        self.canvas.create_text(
+            265,
+            108,
+            anchor="w",
+            fill=TEXT_MUTED,
+            font=("Trebuchet MS", 10, "bold"),
+            text="STARS",
+        )
         draw_star_icon(self.canvas, 314, 91)
-        self.canvas.create_text(344, 103, anchor="w", fill=TEXT, font=("Trebuchet MS", 16, "bold"), text=str(self.total_stars))
+        self.canvas.create_text(
+            344,
+            103,
+            anchor="w",
+            fill=TEXT,
+            font=("Trebuchet MS", 16, "bold"),
+            text=str(self.total_stars),
+        )
+        if self.screen == "playing":
+            self._draw_exit_compass()
+
+    def _draw_exit_compass(self) -> None:
+        if self.player is None or self.exit_tile is None:
+            return
+        cx = self.window_width - 52
+        cy = 57
+        r = 18
+
+        dr = self.exit_tile[0] - self.player.row
+        dc = self.exit_tile[1] - self.player.col
+        dist_tiles = math.sqrt(dr * dr + dc * dc)
+
+        self.canvas.create_text(
+            cx,
+            28,
+            anchor="n",
+            fill=TEXT_MUTED,
+            font=("Trebuchet MS", 10, "bold"),
+            text="EXIT",
+        )
+        self.canvas.create_oval(
+            cx - r, cy - r, cx + r, cy + r, fill="#0f1a14", outline="#2a5c3a", width=2
+        )
+
+        if dist_tiles > 0:
+            norm_r = dr / dist_tiles
+            norm_c = dc / dist_tiles
+            tip_x = cx + (r - 4) * norm_c
+            tip_y = cy + (r - 4) * norm_r
+            base_x = cx - 5 * norm_c
+            base_y = cy - 5 * norm_r
+            perp_x = -norm_r * 4
+            perp_y = norm_c * 4
+            self.canvas.create_polygon(
+                tip_x,
+                tip_y,
+                base_x + perp_x,
+                base_y + perp_y,
+                base_x - perp_x,
+                base_y - perp_y,
+                fill="#67da86",
+                outline="",
+            )
+
+        self.canvas.create_text(
+            cx,
+            cy + r + 6,
+            anchor="n",
+            fill="#67da86",
+            font=("Trebuchet MS", 10, "bold"),
+            text=f"{int(dist_tiles)}t",
+        )
 
     def _draw_start_screen(self) -> None:
-        self.canvas.create_rectangle(14, HUD_HEIGHT + 20, self.window_width - 14, self.window_height - 18, fill=PANEL, outline=PANEL_EDGE, width=2)
+        self.canvas.create_rectangle(
+            14,
+            HUD_HEIGHT + 20,
+            self.window_width - 14,
+            self.window_height - 18,
+            fill=PANEL,
+            outline=PANEL_EDGE,
+            width=2,
+        )
         self.canvas.create_text(
-            self.window_width / 2, HUD_HEIGHT + 56,
-            fill=TEXT, font=("Trebuchet MS", 24, "bold"),
+            self.window_width / 2,
+            HUD_HEIGHT + 56,
+            fill=TEXT,
+            font=("Trebuchet MS", 24, "bold"),
             text="Dungeon Crawler",
         )
         self.canvas.create_text(
-            self.window_width / 2, HUD_HEIGHT + 114,
-            fill="#bcc7d2", font=("Trebuchet MS", 13),
-            width=self.window_width - 60, justify="center",
+            self.window_width / 2,
+            HUD_HEIGHT + 114,
+            fill="#bcc7d2",
+            font=("Trebuchet MS", 13),
+            width=self.window_width - 60,
+            justify="center",
             text=(
                 "\n\n\nArrow keys move through the cave. "
                 "Pick up the sword each level, then press Space to attack the tile in front of you.\n"
@@ -562,30 +921,62 @@ class DungeonCrawlerGame:
         pulse = 0.65 + 0.35 * math.sin(self._now_ms() / 260.0)
         color = "#9de587" if pulse > 0.75 else "#77be68"
         self.canvas.create_text(
-            self.window_width / 2, HUD_HEIGHT + 208,
-            fill=color, font=("Trebuchet MS", 18, "bold"),
+            self.window_width / 2,
+            HUD_HEIGHT + 208,
+            fill=color,
+            font=("Trebuchet MS", 18, "bold"),
             text="\n\nPress any key or click to start",
         )
 
     def _draw_overlay(self, title: str, subtitle: str, footer: str) -> None:
-        self.canvas.create_rectangle(20, HUD_HEIGHT + 50, self.window_width - 20, self.window_height - 50, fill="#12171d", outline=PANEL_EDGE, width=3)
-        self.canvas.create_text(self.window_width / 2, HUD_HEIGHT + 110, fill=TEXT, font=("Trebuchet MS", 24, "bold"), text=title)
-        self.canvas.create_text(self.window_width / 2, HUD_HEIGHT + 150, fill="#d3dbe5", font=("Trebuchet MS", 16, "bold"), text=subtitle)
-        self.canvas.create_text(self.window_width / 2, HUD_HEIGHT + 195, fill=TEXT_MUTED, font=("Trebuchet MS", 13), text=footer)
+        self.canvas.create_rectangle(
+            20,
+            HUD_HEIGHT + 50,
+            self.window_width - 20,
+            self.window_height - 50,
+            fill="#12171d",
+            outline=PANEL_EDGE,
+            width=3,
+        )
+        self.canvas.create_text(
+            self.window_width / 2,
+            HUD_HEIGHT + 110,
+            fill=TEXT,
+            font=("Trebuchet MS", 24, "bold"),
+            text=title,
+        )
+        self.canvas.create_text(
+            self.window_width / 2,
+            HUD_HEIGHT + 150,
+            fill="#d3dbe5",
+            font=("Trebuchet MS", 16, "bold"),
+            text=subtitle,
+        )
+        self.canvas.create_text(
+            self.window_width / 2,
+            HUD_HEIGHT + 195,
+            fill=TEXT_MUTED,
+            font=("Trebuchet MS", 13),
+            text=footer,
+        )
 
     # ----------------------------------------------------------------- helpers
 
-    def _get_camera_origin(self) -> tuple[int, int]:
+    def _get_camera_origin(self) -> tuple[float, float]:
         assert self.player is not None
-        max_row = MAP_HEIGHT - VIEW_TILES
-        max_col = MAP_WIDTH - VIEW_TILES
-        row = max(0, min(max_row, self.player.row - VIEW_TILES // 2))
-        col = max(0, min(max_col, self.player.col - VIEW_TILES // 2))
+        max_row = float(MAP_HEIGHT - VIEW_TILES)
+        max_col = float(MAP_WIDTH - VIEW_TILES)
+        row = max(0.0, min(max_row, self.player.render_row - VIEW_TILES / 2))
+        col = max(0.0, min(max_col, self.player.render_col - VIEW_TILES / 2))
         return row, col
 
     def _is_walkable(self, row: int, col: int) -> bool:
         assert self.cave is not None
-        return 0 <= row < MAP_HEIGHT and 0 <= col < MAP_WIDTH and self.cave.data[row, col] == 1
+        return (
+            0 <= row < MAP_HEIGHT
+            and 0 <= col < MAP_WIDTH
+            and self.cave.data[row, col] == 1
+        )
 
     def _now_ms(self) -> float:
         return float(self.root.tk.call("clock", "milliseconds"))

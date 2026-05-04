@@ -13,6 +13,10 @@ COIN_COUNT = 10
 FOOD_COUNT = 6
 ENEMY_COUNT = 20
 ENEMY_MOVE_MS = 220
+BOID_COUNT = 8
+BOID_MOVE_MS = 300
+PLAYER_MOVE_MS = 100
+LIGHT_RADIUS = 6.0
 LEVEL_COMPLETE_MS = 1500
 TARGET_FPS = 60
 FRAME_MS = int(1000 / TARGET_FPS)
@@ -44,8 +48,16 @@ DIRECTIONS: dict[str, tuple[int, int]] = {
 }
 MOVE_KEYS: dict[str, str] = {
     "Up": "up",
+    "w": "up",
+    "W": "up",
     "Down": "down",
+    "s": "down",
+    "S": "down",
     "Left": "left",
+    "a": "left",
+    "A": "left",
     "Right": "right",
+    "d": "right",
+    "D": "right",
 }
 ATTACK_KEYS: set[str] = {"space"}

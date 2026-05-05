@@ -68,24 +68,22 @@ class DungeonCrawlerGame:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("Dungeon Crawler")
-        self.root.resizable(False, False)
         self.root.configure(bg=BG)
+        self.root.attributes("-fullscreen", True)
         self.root.update_idletasks()
 
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
-        horizontal_scale = max(
-            1.0, (screen_width - (WINDOW_PADDING * 2)) / VIEWPORT_WIDTH
-        )
-        vertical_scale = max(1.0, (screen_height - HUD_HEIGHT - 160) / VIEWPORT_HEIGHT)
-        self.render_scale = min(horizontal_scale, vertical_scale)
-        self.window_width = int(VIEWPORT_WIDTH * self.render_scale) + (
-            WINDOW_PADDING * 2
-        )
-        self.viewport_width = self.window_width - (WINDOW_PADDING * 2)
+        self.window_width = screen_width
+        self.window_height = screen_height
+
+        h_scale = (screen_width - WINDOW_PADDING * 2) / VIEWPORT_WIDTH
+        v_scale = (screen_height - HUD_HEIGHT) / VIEWPORT_HEIGHT
+        self.render_scale = min(h_scale, v_scale)
+
+        self.viewport_width = int(VIEWPORT_WIDTH * self.render_scale)
         self.viewport_height = int(VIEWPORT_HEIGHT * self.render_scale)
-        self.window_height = HUD_HEIGHT + self.viewport_height
-        self.world_left = WINDOW_PADDING
+        self.world_left = (screen_width - self.viewport_width) // 2
 
         self.canvas = tk.Canvas(
             self.root,
@@ -99,6 +97,7 @@ class DungeonCrawlerGame:
 
         self.root.bind("<KeyPress>", self.on_key_press)
         self.root.bind("<KeyRelease>", self.on_key_release)
+        self.root.bind("<Escape>", lambda _: self.root.attributes("-fullscreen", False))
         self.canvas.bind("<Button-1>", self.on_click)
 
         self.cfg = self._load_config()
@@ -561,13 +560,15 @@ class DungeonCrawlerGame:
     def render(self) -> None:
         self.canvas.delete("all")
         self._draw_background()
-        self._draw_hud()
 
         if self.screen == "start":
+            self._draw_hud()
             self._draw_start_screen()
             return
 
         self._draw_world()
+        # HUD drawn after world so it always renders on top of any bleeding tiles
+        self._draw_hud()
 
         if self.screen == "levelcomplete":
             self._draw_overlay(
@@ -728,13 +729,20 @@ class DungeonCrawlerGame:
         self.canvas.scale(
             "world", self.world_left, HUD_HEIGHT, self.render_scale, self.render_scale
         )
-        # Mask tiles that bled into the viewport padding due to sub-tile camera offset
+        # Mask tiles that bleed outside the viewport due to sub-tile camera offset
+        vp_bottom = HUD_HEIGHT + self.viewport_height
         self.canvas.create_rectangle(
-            0, HUD_HEIGHT, self.world_left, self.window_height, fill=BG, width=0
+            0, 0, self.window_width, HUD_HEIGHT, fill=BG, width=0
+        )
+        self.canvas.create_rectangle(
+            0, vp_bottom, self.window_width, self.window_height, fill=BG, width=0
+        )
+        self.canvas.create_rectangle(
+            0, HUD_HEIGHT, self.world_left, vp_bottom, fill=BG, width=0
         )
         self.canvas.create_rectangle(
             self.world_left + self.viewport_width, HUD_HEIGHT,
-            self.window_width, self.window_height, fill=BG, width=0,
+            self.window_width, vp_bottom, fill=BG, width=0,
         )
         self.canvas.create_text(
             self.world_left,

@@ -44,6 +44,7 @@ from .constants import (
     VIEWPORT_WIDTH,
     WINDOW_PADDING,
 )
+from .map_export import save_level_map_png
 from .sprites import (
     draw_boid_enemy,
     draw_coin,
@@ -231,6 +232,16 @@ class DungeonCrawlerGame:
             )
             for r, c in boid_positions
         ]
+        # Exports a full-level reference PNG so the generated cave and placements can be inspected outside the game window.
+        save_level_map_png(
+            cave=self.cave,
+            player=self.player,
+            exit_tile=self.exit_tile,
+            items=self.items,
+            enemies=self.enemies,
+            swarm_enemies=self.boid_enemies,
+            level=self.level,
+        )
 
     def _make_enemy(self, row: int, col: int) -> Enemy:
         return Enemy(
